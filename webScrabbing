@@ -1,0 +1,34 @@
+from bs4 import BeautifulSoup
+import sys
+import pandas as pd
+import html5lib 
+import sys
+import base64
+
+def reading_data_from_html (datafile):
+	with open (datafile, "r", encoding="utf8") as f :
+		soup= BeautifulSoup(f,"html.parser")
+	table=soup.find('table')
+	data=pd.read_html(str(table),flavor ='bs4')[0] # return a list of table frame, only one dataframe is present
+
+	def cleanup(value):
+		# value = bytes(value, 'utf-8')
+		# value=str(value.encode('utf-8'))
+		# value.encode('utf-8')
+		# value=str(value)
+		# base64.b64encode(value)
+		# value=str(value)
+		return value.encode ('ascii', errors='replace').replace("?"," ")
+	data['Name']=data['Name'].apply(cleanup)
+	# except:
+	# 	print (data['Name'])
+	# 	sys.exit()
+	data['Boat [Body]']=data['Boat [Body]'].apply(cleanup)
+	data['Age']=data['Age'].apply(pd.to_numeric, errors="coerce")
+	data=data[["Name","Age","Class/Dept","Boat [Body]"]]
+
+	print data.head()
+
+if __name__ == "__main__":
+	reading_data_from_html("./titanic_data.html")
+
