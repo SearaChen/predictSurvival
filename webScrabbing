@@ -1,9 +1,18 @@
-from bs4 import BeautifulSoup
+# almost done, want it to be run on 2.7, the only version wof python wil the xgboost can be run 
+from beautifulsoup4 import BeautifulSoup
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn import metrics
+from xgboost.sklearn import XGBClassifier
+from sklearn.ensemble import RandomForestClassifier
+import numpy as np
 import sys
 import pandas as pd
 import html5lib 
 import sys
 import base64
+import re
+from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 
 def reading_data_from_html (datafile):
 	with open (datafile, "r", encoding="utf8") as f :
@@ -19,16 +28,138 @@ def reading_data_from_html (datafile):
 		# base64.b64encode(value)
 		# value=str(value)
 		return value.encode ('ascii', errors='replace').replace("?"," ")
-	data['Name']=data['Name'].apply(cleanup)
-	# except:
-	# 	print (data['Name'])
-	# 	sys.exit()
-	data['Boat [Body]']=data['Boat [Body]'].apply(cleanup)
+	# data['Name']=data['Name'].apply(cleanup)
+	# # except:
+	# # 	print (data['Name'])
+	# # 	sys.exit()
+	# data['Boat [Body]']=data['Boat [Body]'].apply(cleanup)
 	data['Age']=data['Age'].apply(pd.to_numeric, errors="coerce")
 	data=data[["Name","Age","Class/Dept","Boat [Body]"]]
 
-	print data.head()
+	def checkPass (class_type):
+		if "Passenger" in class_type:
+			return "Passenger"
+		else:
+			return "Crew"
+
+	data["Crew/Pass"]=data["Class/Dept"].apply(checkPass)
+
+	# sys.exit()	
+	def checkClass(class_type):
+		if "Passenger" in class_type:
+			return class_type.split(" ")[0]
+		else: 
+			return "Crew"
+	data["Class"] = data["Class/Dept"].apply(checkClass)
+	
+	def checkAdult(age):
+		if age > 18 :
+			return "Adult"
+		else: 
+			return "Child"
+	data["Adult/Child"]=data["Age"].apply(checkAdult)
+
+	def checkGender(name):
+		firstname=name[name.index(",")+2:]
+		salutation = firstname.split(" ")[0]
+		if salutation in ["Mr", "Master"]:
+			return "Male"
+		else:
+			return "Female"
+	data["Gender"]=data["Name"].apply(checkGender)
+
+	def checkSurvival(boat):
+		boat=str(boat)
+		if boat.strip() == "nan" or "[" in boat:
+			return 0
+		else:
+			return 1 # 1 means survived
+	data['Survival']=data['Boat [Body]'].apply(checkSurvival)
+	data.groupby(['Crew/Pass'])['Survival'].sum()*100/data.groupby(['Crew/Pass'])['Survival'].count()
+
+	def compare (group, data):
+		return data.groupby([group])['Survival'].sum()*100/data.groupby([group])["Survival"].count()
+	compare("Class",data)
+	trainingData=data[['Age','Crew/Pass','Class','Adult/Child','Gender','Survival']]
+	
+
+	print (trainingData.head())
+
+	def catToNum(series):
+		series= series.astype ('category')
+		return series.cat.codes
+	
+	catData=trainingData[['Crew/Pass','Class','Adult/Child','Gender']].apply(catToNum)
+	trainingData[['Crew/Pass','Class','Adult/Child','Gender']]=catData
+	trainingData=trainingData.dropna(axis=0, how='any')
+	trainingData['Age']=trainingData['Age'].round(0).astype(int)
+	train,test = train_test_split(trainingData, test_size = 0.2)
+
+	def checkAccuracy(clf):
+		clf.fit(train[['Age','Crew/Pass','Class','Adult/Child','Gender']], train['Survival'])
+		predictions= clf.predict(test[['Age','Crew/Pass','Class','Adult/Child','Gender']])
+		return metrics.accuracy_score(test['Survival'],predictions)
+
+	def score(params):
+		'''
+		**kwargs allow python to pass in unspecified number of arguments, BY NAME
+		'''
+		params['n_estimators']=int(params['n_estimators'])
+		clf=XGBClassifier(**params)
+		return {'loss': (1-checkAccuracy(clf)), 'status':STATUS_OK} # pass in value that one wants to minimize -- good practice
+
+	def grid_search(): 
+		space={
+			'n_estimators':hp.quniform('n_estimators',100,1000,1),
+			'learning_rate':hp.quniform('learning_rate', 0.025,0.5,0.025),
+			'max_depth':hp.choice('max_depth', np.arange(1, 14, dtype=int)),
+			'min_child_weight': hp.quniform('min_child_weight', 1,6,1),
+			'subsample' : hp.quniform('subsample',0.5,1,0.05),
+			'gamma': hp.quniform('gamma', 0.5 ,1, 0.05),
+			'colsample_bytree': hp.quniform('colsample_bytree',0.5,1,0.05),
+			'nthread':6,
+			'silent':1
+		}
+		trials=Trials()
+		best= fmin(score,space,algo=tpe.suggest, trials=trials, max_evals=250)
+		return best
+	
+	#best=grid_search()
+
+	# best={
+	# 		'n_estimators':663.0,
+	# 		'learning_rate':0.35,
+	# 		'max_depth':3,
+	# 		'min_child_weight': 2.0,
+	# 		'subsample' : 0.5,
+	# 		'gamma': 0.7,
+	# 		'colsample_bytree': 0.75,
+	# 		'nthread':6,
+	# 		'silent':1
+	# 	}
+
+	clf=XGBClassifier(n_estimators=663.0, learning_rate=0.35, max_depth=3, min_child_weight=2.0,
+						subsample=0.5, gamma=0.7, colsample_bytree=0.75, nthread=6, silent=1)
+	print(train)
+	checkAccuracy(clf)
+	sys.exit()
+	clf.fit(train[['Age','Crew/Pass','Class','Adult/Child','Gender']], train['Survival'])
+	predictions=clf.predict(test[['Age','Crew/Pass','Class','Adult/Child','Gender']])
+
+	predictions=clf.predict_probas(test[['Age','Crew/Pass','Class','Adult/Child','Gender']])
+
+	'''
+	conversion rate :20
+	Class I: 100 upabove
+	Class II : 20-100 
+	Class III : 20 and below
+
+	Asking for information
+	Name, Age, Crew/Pass, Class, Adult/Child, Gender
+	
+	'''
 
 if __name__ == "__main__":
 	reading_data_from_html("./titanic_data.html")
+	
 
